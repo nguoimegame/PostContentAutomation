@@ -6,6 +6,14 @@ import unittest
 import runner
 
 
+class ExitCodeTest(unittest.TestCase):
+    def test_session_expired_code_matches_post_py(self):
+        import post
+
+        self.assertEqual(runner.SESSION_EXPIRED_EXIT, post.EXIT_SESSION_EXPIRED)
+        self.assertNotIn(runner.SESSION_EXPIRED_EXIT, (0, 1))
+
+
 class BuildCommandTest(unittest.TestCase):
     def test_minimal_post_command(self):
         command = runner.build_post_command("py", "D:/app", "C:/tmp/content.txt")

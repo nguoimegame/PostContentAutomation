@@ -1,0 +1,19 @@
+{
+  "headless": false,
+  "scheduler_enabled": true,
+  "pages": [
+    {
+      "name": "Tên hiển thị của Fanpage hoặc nhóm",
+      "url": "https://www.facebook.com/groups/ten-nhom"
+    }
+  ],
+  "templates": [
+    {
+      "name": "Tên mẫu",
+      "content": "Nội dung bài viết dùng lại nhiều lần",
+      "media_path": ""
+    }
+  ],
+  "last_pages": [],
+  "page_gap_minutes": 5
+}

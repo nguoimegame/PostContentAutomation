@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -5,10 +7,17 @@ import time
 import tkinter as tk
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 
 import app as app_module
 import scheduler
 import store
+
+# What login.py leaves behind once Facebook has set its login cookie
+SESSION = json.dumps(
+    {"cookies": [{"name": "c_user", "value": "1", "domain": ".facebook.com", "path": "/", "expires": -1}],
+     "origins": []}
+)
 
 # Stand-ins for the real scripts so the tests never open a browser or touch Facebook
 FAKE_POST = """
@@ -29,14 +38,16 @@ with open("pages.log", "a", encoding="utf-8") as f:
 print("Đăng bài giả lập")
 if "SLOW" in content:
     time.sleep(120)
+if "EXPIRED" in content:
+    sys.exit(2)
 sys.exit(1 if "FAIL" in content or "trang-hong" in (args.page or "") else 0)
 """
 
-FAKE_LOGIN = """
+FAKE_LOGIN = f"""
 print("chờ đăng nhập")
 input()
 with open("state.json", "w", encoding="utf-8") as f:
-    f.write("{}")
+    f.write({SESSION!r})
 print("đã lưu")
 """
 
@@ -48,7 +59,7 @@ class AppTestCase(unittest.TestCase):
         self.dir = tmp.name
         self.write("post.py", FAKE_POST)
         self.write("login.py", FAKE_LOGIN)
-        self.write("state.json", "{}")
+        self.write("state.json", SESSION)
 
     def write(self, name, text):
         with open(os.path.join(self.dir, name), "w", encoding="utf-8") as handle:
@@ -382,6 +393,26 @@ class MultiPageTest(AppTestCase):
         self.assertEqual([job["status"] for job in jobs[1:]], ["pending", "pending"])
         self.assertEqual(self.posted_pages(), [self.A])
 
+    def test_gap_counts_from_when_the_previous_post_finished(self):
+        app = self.start_app_with_pages()
+        # Both posts are already due: only the gap after the first one holds the second back
+        start = datetime.now().replace(second=0, microsecond=0) - timedelta(minutes=3)
+        first, second = app.enqueue_many("Bài chung", [self.A, self.B], "", start, "none", 2)
+        app.tick()
+        self.pump(lambda: first["status"] == "done" and not app.is_busy())
+        finished = datetime.now()
+        self.assertGreaterEqual(scheduler.ready_at(second), finished + timedelta(seconds=110))
+        self.assertIn("giãn cách", second["last_message"])
+        app.tick()
+        self.assertFalse(app.is_busy())
+        self.assertEqual(self.posted_pages(), [self.A])
+        self.assertIn("not_before", self.read_json("queue.json")[1])
+
+    def test_posts_to_a_single_target_are_not_linked(self):
+        app = self.start_app_with_pages()
+        (job,) = app.enqueue_many("Bài", [self.A], "", datetime(2030, 1, 1, 9, 0), "none", 5)
+        self.assertNotIn("batch", job)
+
     def test_publishing_to_several_pages_needs_the_scheduler_on(self):
         app = self.start_app_with_pages()
         app.set_scheduler_enabled(False)
@@ -430,6 +461,25 @@ class QueueTest(AppTestCase):
         app = self.start_app()
         self.assertEqual(app.jobs[0]["status"], "missed")
         self.assertEqual(self.read_json("queue.json")[0]["status"], "missed")
+
+    def test_damaged_queue_entries_are_dropped_and_the_file_is_kept_aside(self):
+        good = scheduler.new_job("Bài tốt", "", "", datetime(2030, 1, 1, 9, 0), "none")
+        damaged = [good, {"content": "thiếu giờ chạy"}, "rác", dict(good, id="x", run_at="mai")]
+        store.save_queue(os.path.join(self.dir, "queue.json"), damaged)
+        app = self.start_app()
+        self.assertEqual(app.jobs, [good])
+        self.assertEqual(app.queue_table.get_children(), (good["id"],))
+        self.assertEqual(self.read_json("queue.json"), [good])
+        self.assertEqual(self.read_json("queue.json.corrupt"), damaged)
+        self.assertIn("Bỏ qua 3 mục hỏng", self.log_text())
+
+    def test_job_with_missing_fields_is_repaired_and_shown(self):
+        self.write("queue.json", json.dumps([{"run_at": "2030-01-01 09:00", "repeat": "yearly"}]))
+        app = self.start_app()
+        (job,) = app.jobs
+        self.assertEqual((job["repeat"], job["status"]), ("none", "pending"))
+        self.assertEqual(app.queue_table.get_children(), (job["id"],))
+        self.assertFalse(self.exists("queue.json.corrupt"))
 
 
 class SchedulerRunTest(AppTestCase):
@@ -510,6 +560,47 @@ class SchedulerRunTest(AppTestCase):
         self.assertIn("đăng nhập", job["last_message"])
         self.assertFalse(self.exists("posted.json"))
 
+    def test_post_that_came_due_while_ticks_were_paused_is_missed(self):
+        app = self.start_app()
+        job = app.enqueue("Bài", "", "", datetime.now() - timedelta(minutes=30), "none")
+        daily = app.enqueue("Bài lặp", "", "", datetime.now() - timedelta(minutes=30), "daily")
+        # No tick for an hour: the computer was asleep
+        app._last_tick = datetime.now() - timedelta(hours=1)
+        app.tick()
+        self.assertFalse(app.is_busy())
+        self.assertEqual(job["status"], "missed")
+        self.assertIn("máy ngủ", job["last_message"])
+        self.assertGreater(scheduler.parse_run_at(daily["run_at"]), datetime.now())
+        self.assertEqual(self.read_json("queue.json")[0]["status"], "missed")
+        self.assertFalse(self.exists("posted.json"))
+
+    def test_post_that_came_due_while_the_scheduler_was_off_is_missed(self):
+        app = self.start_app()
+        app.set_scheduler_enabled(False)
+        job = app.enqueue("Bài", "", "", datetime.now() - timedelta(minutes=30), "none")
+        app._last_tick = datetime.now() - timedelta(hours=1)
+        app.tick()
+        self.assertEqual(job["status"], "pending")
+        app.set_scheduler_enabled(True)
+        app.tick()
+        self.assertEqual(job["status"], "missed")
+
+    def test_post_that_waited_behind_other_posts_still_runs(self):
+        app = self.start_app()
+        job = app.enqueue("Bài", "", "", datetime.now() - timedelta(minutes=30), "none")
+        app.tick()
+        self.assertEqual(job["status"], "running")
+        self.pump(lambda: not app.is_busy())
+        self.assertEqual(job["status"], "done")
+
+    def test_post_shortly_after_a_pause_still_runs(self):
+        app = self.start_app()
+        job = app.enqueue("Bài", "", "", self.past(), "none")
+        app._last_tick = datetime.now() - timedelta(hours=1)
+        app.tick()
+        self.assertEqual(job["status"], "running")
+        self.pump(lambda: not app.is_busy())
+
     def test_headless_setting_is_passed_to_the_script(self):
         app = self.start_app()
         app.set_headless(True)
@@ -556,6 +647,74 @@ class PublishNowTest(AppTestCase):
         self.assertIn("dừng", job["last_message"].lower())
 
 
+class FailureTest(AppTestCase):
+    """Errors the app has to survive: a failed save, a crashing callback."""
+
+    def break_saving(self, name):
+        def refuse(path, data):
+            raise PermissionError(13, "tệp đang bị khóa")
+
+        original = getattr(store, name)
+        setattr(store, name, refuse)
+        self.addCleanup(setattr, store, name, original)
+
+    def test_post_finishes_even_if_the_queue_cannot_be_saved(self):
+        app = self.start_app()
+        job = app.enqueue("Bài", "", "", self.past(), "none")
+        self.break_saving("save_queue")
+        app.tick()
+        self.pump(lambda: not app.is_busy())
+        self.assertEqual(job["status"], "done")
+        self.assertIn("Không lưu được queue.json", self.log_text())
+        self.assertEqual(str(app.publish_button["state"]), "normal")
+
+    def test_settings_change_survives_a_failed_save(self):
+        app = self.start_app()
+        self.break_saving("save_config")
+        app.set_headless(True)
+        self.assertTrue(app.settings["headless"])
+        self.assertIn("Không lưu được config.json", self.log_text())
+
+    def test_tick_loop_goes_on_after_an_error(self):
+        app = self.start_app()
+
+        def crash():
+            raise RuntimeError("hỏng")
+
+        app.tick = crash
+        timers = set(app._timers)
+        with self.assertRaises(RuntimeError):
+            app._tick_loop()
+        self.assertEqual(len(app._timers - timers), 1)
+
+    def test_event_polling_goes_on_after_an_error(self):
+        app = self.start_app()
+        app.events.put(("exit", 0))
+        app.events.put(("line", "dòng sau lỗi"))
+
+        def crash(exit_code):
+            raise RuntimeError("hỏng")
+
+        app._finish_task = crash
+        timers = set(app._timers)
+        with self.assertRaises(RuntimeError):
+            app._poll_events()
+        self.assertEqual(len(app._timers - timers), 1)
+        del app._finish_task
+        self.pump(lambda: "dòng sau lỗi" in self.log_text())
+
+    def test_unexpected_error_in_a_callback_is_shown_in_the_log(self):
+        app = self.start_app()
+
+        def crash():
+            raise RuntimeError("hỏng giữa chừng")
+
+        app.root.after(0, crash)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.pump(lambda: "hỏng giữa chừng" in self.log_text())
+        self.assertIn("RuntimeError", self.log_text())
+
+
 class LoginTest(AppTestCase):
     def test_login_saves_the_session_after_confirmation(self):
         os.remove(os.path.join(self.dir, "state.json"))
@@ -572,6 +731,71 @@ class LoginTest(AppTestCase):
         os.remove(os.path.join(self.dir, "state.json"))
         app = self.start_app()
         self.assertIn("Chưa đăng nhập", app.session_label["text"])
+
+    def test_state_file_of_a_logged_out_browser_is_not_a_session(self):
+        self.write("state.json", '{"cookies": [], "origins": []}')
+        app = self.start_app()
+        self.assertIn("Chưa đăng nhập", app.session_label["text"])
+        with self.assertRaises(RuntimeError):
+            app.publish_now("Bài", "", "")
+
+    def test_expired_session_is_reported_on_the_job_and_the_settings_tab(self):
+        app = self.start_app()
+        job = app.enqueue("EXPIRED", "", "", self.past(), "none")
+        app.tick()
+        self.pump(lambda: not app.is_busy())
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("hết hạn", job["last_message"])
+        self.assertIn("hết hạn", app.session_label["text"])
+
+    def test_logging_in_again_clears_the_expired_session(self):
+        app = self.start_app()
+        app.publish_now("EXPIRED", "", "")
+        self.pump(lambda: not app.is_busy())
+        self.assertIn("hết hạn", app.session_label["text"])
+        app.start_login()
+        self.pump(lambda: "chờ đăng nhập" in self.log_text())
+        app.confirm_login()
+        self.pump(lambda: not app.is_busy())
+        self.assertIn("Đã đăng nhập", app.session_label["text"])
+
+    def test_ordinary_failure_does_not_blame_the_session(self):
+        app = self.start_app()
+        app.publish_now("FAIL", "", "")
+        self.pump(lambda: not app.is_busy())
+        self.assertIn("Đã đăng nhập", app.session_label["text"])
+
+    def test_session_stays_expired_until_a_post_goes_through(self):
+        app = self.start_app()
+        for content, expected in (("EXPIRED", "hết hạn"), ("FAIL", "hết hạn"), ("Bài", "Đã đăng nhập")):
+            with self.subTest(content=content):
+                app.publish_now(content, "", "")
+                self.pump(lambda: not app.is_busy())
+                self.assertIn(expected, app.session_label["text"])
+
+
+class SingleInstanceTest(unittest.TestCase):
+    def start(self, lock):
+        with mock.patch.object(app_module.tk, "Tk"), \
+                mock.patch.object(store, "lock_file", return_value=lock) as locked, \
+                mock.patch.object(app_module.messagebox, "showerror") as refused, \
+                mock.patch.object(app_module, "App") as started:
+            app_module.main()
+        return locked, refused, started
+
+    def test_second_copy_refuses_to_start(self):
+        locked, refused, started = self.start(lock=None)
+        refused.assert_called_once()
+        started.assert_not_called()
+
+    def test_first_copy_starts_and_locks_its_own_folder(self):
+        locked, refused, started = self.start(lock=object())
+        refused.assert_not_called()
+        started.assert_called_once()
+        (lock_path,), _ = locked.call_args
+        self.assertEqual(
+            lock_path, os.path.join(os.path.dirname(os.path.abspath(app_module.__file__)), "app.lock")
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import contextlib
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -34,6 +36,37 @@ class MainExitCodeTest(EmptyWorkingDirTest):
 
     def test_exit_code_is_1_for_a_missing_content_file(self):
         self.assertEqual(self.quietly(post.main, ["--content-file", "khong-co.txt"]), 1)
+
+
+class OutputEncodingTest(unittest.TestCase):
+    """Output redirected to a file or pipe uses the system code page, not UTF-8."""
+
+    def run_python(self, code):
+        # An ASCII-only stdout stands in for a code page that has no Vietnamese letters
+        env = dict(os.environ, PYTHONIOENCODING="ascii")
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=os.path.dirname(os.path.abspath(post.__file__)),
+            env=env,
+            capture_output=True,
+        )
+
+    def test_vietnamese_cannot_be_printed_without_the_fix(self):
+        result = self.run_python("print('\\u0110\\u0103ng b\\u00e0i')")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"UnicodeEncodeError", result.stderr)
+
+    def test_use_utf8_output_makes_printing_safe(self):
+        result = self.run_python("import post; post.use_utf8_output(); print('\\u0110\\u0103ng b\\u00e0i')")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.decode("utf-8").strip(), "Đăng bài")
+
+    def test_the_command_line_switches_to_utf8_before_printing(self):
+        result = self.run_python(
+            "import post; post.main(['--content-file', 'khong-co.txt']); print('\\u0110\\u0103ng b\\u00e0i')"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Đăng bài", result.stdout.decode("utf-8"))
 
 
 class ResolveContentTest(EmptyWorkingDirTest):

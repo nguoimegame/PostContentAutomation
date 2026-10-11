@@ -5,6 +5,10 @@ import threading
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Exit code post.py uses for "Facebook wants a new login" (post.EXIT_SESSION_EXPIRED).
+# Repeated here because importing post would pull Playwright into the UI process.
+SESSION_EXPIRED_EXIT = 2
+
 
 def console_python(executable):
     """Swap pythonw.exe for the python.exe next to it so the child has a stdout."""

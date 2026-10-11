@@ -4,6 +4,7 @@ import queue
 import sys
 import tempfile
 import tkinter as tk
+import traceback
 from datetime import datetime, timedelta
 from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -50,9 +51,15 @@ class App:
         self.python_exe = runner.console_python(sys.executable)
 
         self.settings = store.load_config(self.config_path)
-        self.jobs = store.load_queue(self.queue_path)
-        if scheduler.recover_at_startup(self.jobs, datetime.now()):
-            self._save_queue()
+        self.jobs, dropped = scheduler.valid_jobs(store.load_queue(self.queue_path))
+        if dropped:
+            # The next save rewrites queue.json without the entries that could not be read
+            store.keep_aside(self.queue_path)
+        recovered = scheduler.recover_at_startup(self.jobs, datetime.now())
+        self._last_tick = datetime.now()
+        # Set when post.py reports that Facebook wants a new login; cleared by the next
+        # login or the next post that goes through
+        self._session_expired = False
 
         # The runner calls back from its reader thread; events are handed to
         # the UI thread through this queue and drained by _poll_events
@@ -66,6 +73,11 @@ class App:
         self._timers = set()
 
         self._build_ui()
+        root.report_callback_exception = self._on_callback_error
+        if dropped or recovered:
+            self._save_queue()
+        if dropped:
+            self.log(f"⚠ Bỏ qua {dropped} mục hỏng trong queue.json, bản gốc được giữ ở queue.json.corrupt")
         self._refresh_pages()
         self._refresh_templates()
         self._refresh_queue()
@@ -215,11 +227,20 @@ class App:
         self.settings["last_pages"] = names
         self._save_settings()
 
+    # A file briefly held by a sync tool or antivirus must not break the action in
+    # progress: everything is still in memory and is written again on the next change
+
     def _save_settings(self):
-        store.save_config(self.config_path, self.settings)
+        try:
+            store.save_config(self.config_path, self.settings)
+        except OSError as error:
+            self.log(f"⚠ Không lưu được config.json: {error}")
 
     def _save_queue(self):
-        store.save_queue(self.queue_path, self.jobs)
+        try:
+            store.save_queue(self.queue_path, self.jobs)
+        except OSError as error:
+            self.log(f"⚠ Không lưu được queue.json: {error}")
 
     # ------------------------------------------------------------------
     # Queue and scheduling
@@ -239,6 +260,8 @@ class App:
             scheduler.new_job(content, page_url, image_path, moment, repeat)
             for page_url, moment in zip(page_urls, run_times)
         ]
+        if len(jobs) > 1:
+            scheduler.link_batch(jobs, gap_minutes)
         self.jobs.extend(jobs)
         self._save_queue()
         self._refresh_queue()
@@ -257,15 +280,29 @@ class App:
 
     def tick(self):
         """Publish the next due post, if any and if nothing else is running."""
-        if self._closed or self.is_busy() or not self.settings["scheduler_enabled"]:
+        if self._closed or not self.settings["scheduler_enabled"]:
             return
-        due = scheduler.due_jobs(self.jobs, datetime.now())
+        now = datetime.now()
+        # Ticks stop while the computer sleeps or the scheduler is off. Posts that came
+        # due in such a gap are flagged as missed, like at startup, not all posted late.
+        paused = now - self._last_tick > scheduler.GRACE
+        self._last_tick = now
+        if paused and scheduler.skip_overdue(self.jobs, now, reason="máy ngủ hoặc hẹn giờ đang tắt"):
+            self._save_queue()
+            self._refresh_queue()
+        if self.is_busy():
+            return
+        due = scheduler.due_jobs(self.jobs, now)
         if due:
             self.run_job(due[0])
 
     def _tick_loop(self):
-        self.tick()
-        self._later(TICK_MS, self._tick_loop)
+        # An error in one tick must not end the loop, or nothing is ever posted again
+        try:
+            self.tick()
+        finally:
+            if not self._closed:
+                self._later(TICK_MS, self._tick_loop)
 
     def run_job(self, job):
         """Publish a queued post now; a post that cannot start is marked failed."""
@@ -377,7 +414,10 @@ class App:
                     self._finish_task(payload)
         except queue.Empty:
             pass
-        self._later(POLL_MS, self._poll_events)
+        finally:
+            # Keep polling even if handling an event failed, or the app stays "busy" forever
+            if not self._closed:
+                self._later(POLL_MS, self._poll_events)
 
     def _finish_task(self, exit_code):
         task, self.task = self.task, None
@@ -389,15 +429,26 @@ class App:
             if task["stopped"]:
                 message = "Đã dừng theo yêu cầu"
             elif success:
-                message = "Script chạy xong, không báo lỗi"
+                message = "Đã đăng, hộp soạn bài đã đóng"
+            elif exit_code == runner.SESSION_EXPIRED_EXIT:
+                message = "Phiên đăng nhập Facebook đã hết hạn hoặc bị checkpoint, hãy đăng nhập lại ở tab Cài đặt"
             else:
                 message = f"Thất bại (mã thoát {exit_code}), xem nhật ký và ảnh debug"
+            # Only a post that went through proves the session works again: an unrelated
+            # failure (no network) says nothing about it
+            if success or (exit_code == runner.SESSION_EXPIRED_EXIT and not task["stopped"]):
+                self._session_expired = not success
+                self._refresh_session()
             job = task["job"]
             if job is not None:
-                scheduler.after_run(job, success, message, datetime.now())
+                now = datetime.now()
+                scheduler.after_run(job, success, message, now)
+                scheduler.hold_back_batch(self.jobs, job, now)
                 self._save_queue()
                 self._refresh_queue()
         else:
+            if success:
+                self._session_expired = False
             self._refresh_session()
             message = "Đã lưu phiên đăng nhập" if success else "Đăng nhập chưa hoàn tất"
         self.log(("✔ " if success else "✖ ") + message)
@@ -726,8 +777,8 @@ class App:
             wraplength=self._px(860),
             justify="left",
             text=(
-                "Trạng thái “Xong” chỉ có nghĩa là script chạy hết mà không báo lỗi. "
-                "Hãy mở ảnh kết quả hoặc vào Facebook để chắc chắn bài đã lên."
+                "Trạng thái “Xong” nghĩa là Facebook đã nhận bài (hộp soạn bài đóng lại sau khi bấm Đăng). "
+                "Nhóm có kiểm duyệt vẫn có thể giữ bài chờ duyệt: mở ảnh kết quả hoặc vào Facebook để xem."
             ),
         ).pack(anchor="w", pady=(0, 6))
         check_buttons = ttk.Frame(check)
@@ -801,6 +852,10 @@ class App:
         saved = store.session_saved_at(self.state_path)
         if saved is None:
             self.session_label.configure(text="Chưa đăng nhập", foreground="#b3261e")
+        elif self._session_expired:
+            self.session_label.configure(
+                text="Phiên đăng nhập đã hết hạn, hãy đăng nhập lại", foreground="#b3261e"
+            )
         else:
             self.session_label.configure(
                 text=f"Đã đăng nhập (phiên lưu lúc {saved:%Y-%m-%d %H:%M})", foreground="#1a7f37"
@@ -909,6 +964,15 @@ class App:
 
     def _error(self, error, parent=None):
         messagebox.showerror("Không thực hiện được", str(error), parent=parent or self.root)
+
+    def _on_callback_error(self, kind, error, trace):
+        """An unexpected error in a UI callback: show it in the log, not only on a console nobody sees."""
+        if sys.stderr is not None:
+            traceback.print_exception(kind, error, trace)
+        try:
+            self.log(f"✖ Lỗi không mong đợi: {kind.__name__}: {error}")
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------
     # UI handlers: compose tab
@@ -1128,6 +1192,8 @@ class App:
                 status="pending",
                 last_message="",
             )
+            # A time set by hand replaces the wait that a multi-target post put on this job
+            job.pop("not_before", None)
             self._save_queue()
             self._refresh_queue()
             dialog.destroy()
@@ -1334,6 +1400,18 @@ def main():
     except Exception:
         pass
     root = tk.Tk()
+    # Two copies working on the same queue.json would both publish every scheduled post.
+    # The lock is held for as long as this variable lives, i.e. until the app exits.
+    lock = store.lock_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.lock"))
+    if lock is None:
+        root.withdraw()
+        messagebox.showerror(
+            "Facebook Auto Poster",
+            "Ứng dụng đang mở ở một cửa sổ khác.\n\n"
+            "Chạy hai bản cùng lúc sẽ đăng trùng các bài hẹn giờ.",
+        )
+        root.destroy()
+        return
     App(root)
     root.mainloop()
 

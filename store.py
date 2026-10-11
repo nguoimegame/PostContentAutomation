@@ -2,6 +2,8 @@
 import copy
 import json
 import os
+import shutil
+import time
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -42,11 +44,37 @@ def save_json(path, data):
     os.replace(temp_path, path)
 
 
+def keep_aside(path):
+    """Copy a file to `<name>.corrupt` before its damaged entries are dropped on the next save."""
+    try:
+        shutil.copyfile(path, path + ".corrupt")
+    except OSError:
+        pass
+
+
+def _named_items(items, *text_keys):
+    return [
+        item
+        for item in items
+        if isinstance(item, dict) and all(isinstance(item.get(key), str) for key in text_keys)
+    ]
+
+
 def load_config(path):
+    """Read the settings; anything missing or of the wrong type falls back to its default."""
     config = copy.deepcopy(DEFAULT_CONFIG)
     saved = load_json(path, {})
     if isinstance(saved, dict):
-        config.update(saved)
+        for key, value in saved.items():
+            # type() rather than isinstance: a bool must not pass for the number of minutes
+            if key in DEFAULT_CONFIG and type(value) is not type(DEFAULT_CONFIG[key]):
+                continue
+            config[key] = value
+    config["pages"] = _named_items(config["pages"], "name", "url")
+    config["templates"] = _named_items(config["templates"], "name", "content")
+    config["last_pages"] = [name for name in config["last_pages"] if isinstance(name, str)]
+    if config["page_gap_minutes"] < 0:
+        config["page_gap_minutes"] = DEFAULT_CONFIG["page_gap_minutes"]
     return config
 
 
@@ -86,7 +114,45 @@ def normalize_page_url(url):
 
 
 def session_saved_at(state_path):
-    """When the login session was saved, or None if there is no session yet."""
-    if not os.path.exists(state_path):
+    """When the login session was saved, or None if there is no usable session.
+
+    A state file without Facebook's login cookie (c_user), or with one that has
+    expired, is a logged-out browser and does not count. Facebook can still end
+    a session early; only post.py finds that out.
+    """
+    try:
+        with open(state_path, encoding="utf-8") as handle:
+            cookies = json.load(handle)["cookies"]
+        logged_in = any(
+            cookie["name"] == "c_user"
+            and cookie.get("domain", "").endswith("facebook.com")
+            # Playwright stores -1 for a cookie that lasts until the browser closes
+            and (cookie.get("expires", -1) < 0 or cookie["expires"] > time.time())
+            for cookie in cookies
+        )
+        return datetime.fromtimestamp(os.path.getmtime(state_path)) if logged_in else None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
-    return datetime.fromtimestamp(os.path.getmtime(state_path))
+
+
+def lock_file(path):
+    """Take an exclusive lock on `path` so only one copy of the app works on this folder.
+
+    Returns the open file, or None if another process holds the lock. The lock
+    lasts until the file is closed or the process ends, even after a crash.
+    """
+    handle = open(path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle

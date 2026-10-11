@@ -2,7 +2,9 @@
 state.json
 
 # Runtime data
+config.json
 queue.json
+app.lock
 *.corrupt
 *.tmp
 
