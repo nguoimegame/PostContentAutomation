@@ -1,0 +1,32 @@
+{
+  "headless": false,
+  "scheduler_enabled": true,
+  "pages": [
+    {
+      "name": "Hội Jaecoo J7 PHEV Việt Nam™ (JaecooJ7ClubVN)",
+      "url": "https://www.facebook.com/groups/jaecooj7vn"
+    },
+    {
+      "name": "Hội Jaecoo J7 & Jaecoo J7 PHEV Việt Nam™",
+      "url": "https://www.facebook.com/groups/983109823290043"
+    },
+    {
+      "name": "Hội Jaecoo J7 PHEV Việt Nam™",
+      "url": "https://www.facebook.com/groups/2674828959587033"
+    }
+  ],
+  "templates": [
+    {
+      "name": "instroduce  JaecooApp",
+      "content": "🚗 JaecooApp – nâng cấp màn hình trung tâm cho Jaecoo J7, J5 & Omoda C5\nMột ứng dụng, gói gọn những thứ màn hình zin còn thiếu:\n📦 Cài ứng dụng thẳng lên đầu xe – YouTube và YouTube Music không quảng cáo (phát được trong nền), Google Maps, Waze, Vietmap… Chọn sẵn trong Kho Jaecoo hoặc tải từ Google Play, bấm là cài.\n👆 Điều khiển xe bằng cử chỉ – vuốt 2 hoặc 3 ngón để chỉnh quạt gió, nhiệt độ, lấy gió trong/ngoài, sưởi và làm mát ghế. Tự gán hành động cho từng cử chỉ, dùng được cả khi đang mở app khác.\n🪟 Đa nhiệm cửa sổ nổi – mở thêm một app ở góc màn hình, vừa dẫn đường vừa xem YouTube.\n🌤️ Thời tiết buồng lái – nhiệt độ, chất lượng không khí, dự báo 24 giờ và 7 ngày, kèm widget nổi làm phím tắt.\n📶 Quản lý Wi-Fi, ẩn/hiện ứng dụng, xem chế độ lái, cập nhật OTA ngay trong app.\nCài đặt qua WebUSB, không cần tháo lắp gì.\n👉 Tải và xem hướng dẫn: https://japp.cloud\n#Jaecoo #JaecooJ7 #JaecooApp #Vietmap #GoogleMaps",
+      "media_path": "C:\\Users\\Admin\\AppData\\Local\\CapCut\\Videos\\1005 (2).mp4"
+    }
+  ],
+  "last_pages": [
+    "Hội Jaecoo J7 PHEV Việt Nam™ (JaecooJ7ClubVN)",
+    "Hội Jaecoo J7 & Jaecoo J7 PHEV Việt Nam™",
+    "Hội Jaecoo J7 PHEV Việt Nam™"
+  ],
+  "page_gap_minutes": 5,
+  "last_page": "Hội Jaecoo J7 PHEV Việt Nam™"
+}

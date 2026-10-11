@@ -1,0 +1,17 @@
+# Facebook login session (cookies) - never commit
+state.json
+
+# Runtime data
+queue.json
+*.corrupt
+*.tmp
+
+# Debug screenshots written by post.py
+debug_*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
