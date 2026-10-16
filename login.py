@@ -1,6 +1,9 @@
 import os
 from playwright.sync_api import sync_playwright
 
+# Saved next to the scripts so post.py finds it whatever folder it runs from
+STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
+
 def is_logged_in(context):
     # c_user holds the account id and only exists once the login (including 2FA) has gone through
     return any(cookie["name"] == "c_user" for cookie in context.cookies("https://www.facebook.com"))
@@ -36,9 +39,8 @@ def run():
             input()
 
         # Save storage state to a file
-        state_path = "state.json"
-        save_state(context, state_path)
-        print(f"\n[Thanh cong] Da luu thong tin phien dang nhap vao tep: {state_path}")
+        save_state(context, STATE_PATH)
+        print(f"\n[Thanh cong] Da luu thong tin phien dang nhap vao tep: {STATE_PATH}")
 
         browser.close()
 

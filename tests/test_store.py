@@ -89,6 +89,22 @@ class ConfigTest(TempDirTest):
         self.assertEqual(config["last_pages"], ["Nhóm A"])
         self.assertEqual(config["page_gap_minutes"], 5)
 
+    def test_page_language_of_the_wrong_type_is_cleared(self):
+        store.save_json(
+            self.path("config.json"),
+            {
+                "pages": [
+                    {"name": "A", "url": "https://www.facebook.com/a", "language": 5},
+                    {"name": "B", "url": "https://www.facebook.com/b", "language": "English (Mỹ)"},
+                    {"name": "C", "url": "https://www.facebook.com/c"},
+                ]
+            },
+        )
+        pages = store.load_config(self.path("config.json"))["pages"]
+        self.assertEqual(pages[0]["language"], "")
+        self.assertEqual(pages[1]["language"], "English (Mỹ)")
+        self.assertNotIn("language", pages[2])
+
     def test_keys_the_app_does_not_know_are_kept(self):
         store.save_json(self.path("config.json"), {"last_page": "Nhóm A"})
         self.assertEqual(store.load_config(self.path("config.json"))["last_page"], "Nhóm A")

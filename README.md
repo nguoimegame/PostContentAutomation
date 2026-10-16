@@ -11,6 +11,8 @@ Bạn cần cài đặt sẵn **Python** (phiên bản >= 3.8) trên máy tính 
 - [post.py](file:///d:/WorkSpace/Assistant/post.py): Sử dụng session đã lưu ở trên để tự động vào Facebook và đăng nội dung bài viết chỉ định.
 - [app.py](file:///d:/WorkSpace/Assistant/app.py): Giao diện desktop (Tkinter) để đăng nhập, soạn bài, quản lý Fanpage/mẫu nội dung và hẹn giờ đăng bài.
 - [store.py](file:///d:/WorkSpace/Assistant/store.py), [scheduler.py](file:///d:/WorkSpace/Assistant/scheduler.py), [runner.py](file:///d:/WorkSpace/Assistant/runner.py): Phần lưu cấu hình, logic hẹn giờ và chạy script cho giao diện.
+- [enqueue.py](file:///d:/WorkSpace/Assistant/enqueue.py): Dòng lệnh để thêm/xem/xóa bài hẹn giờ không cần mở giao diện.
+- [AGENTS.md](file:///d:/WorkSpace/Assistant/AGENTS.md) (`CLAUDE.md` trỏ tới cùng nội dung) và `.claude/skills/facebook-post/`: hướng dẫn cho AI agent dùng phần mềm này.
 - `tests/`: Unit test, chạy bằng `python -m unittest`.
 
 ---
@@ -29,7 +31,7 @@ Giao diện có 4 tab:
 |---|---|
 | **Đăng bài** | Chọn một hoặc nhiều nơi đăng (trang cá nhân, Fanpage, nhóm), soạn nội dung hoặc chèn mẫu, chọn một ảnh hoặc video, rồi **Đăng ngay** hoặc **Thêm vào hàng đợi** kèm thời điểm và kiểu lặp. |
 | **Hàng đợi** | Danh sách bài đã hẹn giờ và trạng thái (Chờ / Đang chạy / Xong / Lỗi / Lỡ). Có thể đăng ngay, sửa, xóa từng bài. |
-| **Fanpage & Mẫu** | Lưu các Fanpage (tên + URL) và các mẫu dùng lại nhiều lần. Mỗi mẫu gồm nội dung và có thể kèm một ảnh hoặc video; khi chèn mẫu, tệp đính kèm được điền theo. |
+| **Fanpage & Mẫu** | Lưu các Fanpage (tên + URL + ngôn ngữ) và các mẫu dùng lại nhiều lần. Ô **Ngôn ngữ** ghi trang thuộc nước nào và dùng ngôn ngữ gì, ví dụ "English (Mỹ)": chọn trong danh sách có sẵn hoặc tự gõ; ngôn ngữ hiện cạnh tên trang trong danh sách Fanpage và trong hộp **Chọn nơi đăng…**. Mỗi mẫu gồm nội dung và có thể kèm một ảnh hoặc video; khi chèn mẫu, tệp đính kèm được điền theo. |
 | **Cài đặt** | Đăng nhập Facebook và lưu phiên, bật/tắt chế độ chạy ẩn trình duyệt, mở ảnh kết quả gần nhất. |
 
 Lần đầu sử dụng: vào tab **Cài đặt** → **Đăng nhập Facebook…** → đăng nhập trong cửa sổ trình duyệt → quay lại bấm **Tôi đã đăng nhập xong**.
@@ -64,7 +66,7 @@ Mở terminal/cmd tại thư mục này và chạy các lệnh sau:
 
 ```bash
 # Cài đặt thư viện Playwright cho Python
-pip install playwright
+pip install -r requirements.txt
 
 # Cài đặt trình duyệt đi kèm của Playwright
 playwright install chromium
@@ -103,8 +105,11 @@ Các tùy chọn thêm:
 | `--image <đường dẫn>` | Đính kèm một ảnh hoặc một video. Nếu không tải được tệp, script dừng lại và không đăng bài. |
 | `--headless` | Chạy ẩn trình duyệt. |
 | `--content-file <tệp>` | Đọc nội dung từ tệp văn bản UTF-8 (tiện cho bài dài, nhiều dòng). |
+| `--dry-run` | Soạn bài và chụp `debug_dry_run.png` nhưng **không bấm Đăng**, để thử. |
+| `--json` | In kết quả thành một dòng JSON trên stdout (`ok`, `status`, `exit_code`, `message`, `debug_images`); nhật ký chuyển sang stderr. |
+| `--list-pages` | Liệt kê Fanpage/nhóm và mẫu trong `config.json` cùng tình trạng phiên đăng nhập, rồi thoát (không đăng). |
 
-Script thoát với mã `0` khi bài đã được đăng, mã `1` khi thất bại và mã `2` khi phiên đăng nhập đã hết hạn (cần chạy lại `login.py`). Sau mỗi lần đăng thành công, `state.json` được lưu lại với cookie mới nhất để phiên dùng được lâu hơn.
+Script thoát với mã `0` khi bài đã được đăng, mã `1` khi thất bại và mã `2` khi chưa có `state.json` hoặc phiên đăng nhập đã hết hạn (cần chạy lại `login.py`). `state.json` luôn được tìm cạnh các script, chạy lệnh từ thư mục nào cũng được. Sau mỗi lần đăng thành công, `state.json` được lưu lại với cookie mới nhất để phiên dùng được lâu hơn.
 
 *Cách thức hoạt động:*
 1. Script sẽ mở trình duyệt Chromium và tải dữ liệu từ tệp `state.json` (bạn sẽ được tự động đăng nhập vào Facebook mà không cần nhập lại mật khẩu).
@@ -112,6 +117,20 @@ Script thoát với mã `0` khi bài đã được đăng, mã `1` khi thất b�
 3. Mở khung soạn thảo văn bản, tự động điền nội dung bài đăng truyền vào từ dòng lệnh.
 4. Tìm nút "Đăng" (hoặc "Post") trong hộp soạn bài, chờ nút hết bị mờ rồi nhấp chuột, sau đó chờ hộp soạn bài đóng lại để xác nhận bài đã được gửi.
 5. Nếu xảy ra lỗi không tìm thấy nút, chương trình sẽ tự động chụp ảnh màn hình dạng `debug_*.png` trong thư mục để bạn dễ dàng tìm nguyên nhân (ví dụ: giao diện Facebook thay đổi).
+
+### Hẹn giờ bằng dòng lệnh (`enqueue.py`)
+
+```bash
+python enqueue.py add --content-file bai.txt --page https://www.facebook.com/tentrang --at "2026-10-20 08:30"
+python enqueue.py list
+python enqueue.py remove <id>
+```
+
+`add` nhận `--image`, `--repeat none|daily|weekly` và có thể lặp `--page` để đăng nhiều nơi (cách nhau `--gap` phút, mặc định lấy từ `config.json`). Thêm `--json` ngay sau `enqueue.py` để có kết quả dạng JSON. Bài vẫn chỉ được đăng khi `app.py` đang mở; vì app ghi đè `queue.json`, `add`/`remove` từ chối chạy (mã thoát `3`) khi app đang mở.
+
+### Dùng cùng AI agent
+
+Xem [AGENTS.md](file:///d:/WorkSpace/Assistant/AGENTS.md): lệnh nên dùng, mã thoát, những việc agent không được tự làm (đọc `state.json`, tự đăng nhập, đăng thật khi chưa được xác nhận).
 
 ---
 

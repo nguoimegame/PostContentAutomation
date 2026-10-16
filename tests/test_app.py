@@ -104,17 +104,57 @@ class PagesAndTemplatesTest(AppTestCase):
         app.add_page("Hi English", "facebook.com/hienglishoffical")
         self.assertEqual(
             self.read_json("config.json")["pages"],
-            [{"name": "Hi English", "url": "https://facebook.com/hienglishoffical"}],
+            [{"name": "Hi English", "url": "https://facebook.com/hienglishoffical", "language": ""}],
         )
 
     def test_adding_a_page_with_an_existing_name_updates_it(self):
         app = self.start_app()
-        app.add_page("Hi English", "facebook.com/old")
-        app.add_page("Hi English", "facebook.com/new")
+        app.add_page("Hi English", "facebook.com/old", "English (Mỹ)")
+        app.add_page("Hi English", "facebook.com/new", "English (Anh)")
         self.assertEqual(
             self.read_json("config.json")["pages"],
-            [{"name": "Hi English", "url": "https://facebook.com/new"}],
+            [{"name": "Hi English", "url": "https://facebook.com/new", "language": "English (Anh)"}],
         )
+
+    def test_page_language_is_saved_trimmed(self):
+        app = self.start_app()
+        app.add_page("Hi English", "facebook.com/hienglishoffical", "  English (Mỹ) ")
+        self.assertEqual(self.read_json("config.json")["pages"][0]["language"], "English (Mỹ)")
+
+    def test_page_list_shows_the_language(self):
+        app = self.start_app()
+        app.add_page("Hi English", "facebook.com/hienglishoffical", "English (Mỹ)")
+        app.add_page("Không rõ", "facebook.com/abc")
+        self.assertEqual(
+            app.page_list.get(0, "end"),
+            (
+                "Hi English  —  English (Mỹ)  —  https://facebook.com/hienglishoffical",
+                "Không rõ  —  https://facebook.com/abc",
+            ),
+        )
+
+    def test_selecting_a_page_in_the_list_shows_its_language(self):
+        app = self.start_app()
+        app.add_page("Hi English", "facebook.com/hienglishoffical", "English (Mỹ)")
+        app.page_list.selection_set(0)
+        app._on_page_list_selected()
+        self.assertEqual(app.page_language_var.get(), "English (Mỹ)")
+
+    def test_page_saved_before_languages_existed_still_loads(self):
+        store.save_json(
+            os.path.join(self.dir, "config.json"),
+            {"pages": [{"name": "Cũ", "url": "https://facebook.com/cu"}]},
+        )
+        app = self.start_app()
+        app.page_list.selection_set(0)
+        app._on_page_list_selected()
+        self.assertEqual(app.page_language_var.get(), "")
+        self.assertEqual(app.page_list.get(0), "Cũ  —  https://facebook.com/cu")
+
+    def test_language_box_offers_common_languages(self):
+        app = self.start_app()
+        self.assertIn("Tiếng Việt (Việt Nam)", app.page_language_box.cget("values"))
+        self.assertIn("English (Mỹ)", app.page_language_box.cget("values"))
 
     def test_page_with_a_non_facebook_url_is_rejected(self):
         app = self.start_app()
@@ -260,6 +300,16 @@ class MultiPageTest(AppTestCase):
             [box.cget("text") for box in dialog.checks.values()],
             ["(Trang cá nhân)", "Nhóm A", "Nhóm B", "Nhóm hỏng"],
         )
+
+    def test_picker_popup_shows_the_language_of_each_page(self):
+        app = self.start_app_with_pages()
+        app.add_page("Nhóm A", self.A, "English (Mỹ)")
+        dialog = app.open_target_dialog()
+        self.assertEqual(dialog.checks["Nhóm A"].cget("text"), "Nhóm A  ·  English (Mỹ)")
+        self.assertEqual(dialog.checks["Nhóm B"].cget("text"), "Nhóm B")
+        dialog.checks["Nhóm A"].invoke()
+        dialog.ok()
+        self.assertEqual(app.selected_targets(), ["(Trang cá nhân)", "Nhóm A"])
 
     def test_picker_popup_opens_with_the_current_selection_ticked(self):
         app = self.start_app_with_pages()

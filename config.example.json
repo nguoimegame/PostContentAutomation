@@ -4,7 +4,8 @@
   "pages": [
     {
       "name": "Tên hiển thị của Fanpage hoặc nhóm",
-      "url": "https://www.facebook.com/groups/ten-nhom"
+      "url": "https://www.facebook.com/groups/ten-nhom",
+      "language": "Tiếng Việt (Việt Nam)"
     }
   ],
   "templates": [

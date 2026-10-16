@@ -1,9 +1,18 @@
 import os
 import sys
 import time
+import json
 import argparse
+import contextlib
 from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
+
+import store
+
+# Session and settings live next to the scripts, whatever folder the caller runs from
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATE_PATH = os.path.join(BASE_DIR, "state.json")
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv")
 VIDEO_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
@@ -281,12 +290,15 @@ def require_login(page):
             pass
         raise SessionExpired("Facebook yeu cau dang nhap lai hoac xac minh (checkpoint).")
 
-def make_post(text, page_url=None, headless=False, image_path=None):
-    """Publish a post. Returns True once Facebook has taken it; raises SessionExpired if logged out."""
-    state_path = "state.json"
+def make_post(text, page_url=None, headless=False, image_path=None, state_path=None, dry_run=False):
+    """Publish a post. Returns True once Facebook has taken it; raises SessionExpired if logged out.
+
+    With `dry_run` the post is written but never published.
+    """
+    state_path = state_path or STATE_PATH
     if not os.path.exists(state_path):
-        print(f"Loi: Khong tim thay tep {state_path}. Vui long chay python login.py truoc de dang nhap.")
-        return False
+        # No session is the same problem for the caller as an expired one: a login is needed
+        raise SessionExpired(f"Khong tim thay tep {state_path}. Vui long chay python login.py truoc de dang nhap.")
 
     with sync_playwright() as p:
         print(f"Dang mo trinh duyet (Chế độ: {'Ẩn danh/Headless' if headless else 'Hiển thị/Headful'})...")
@@ -295,14 +307,14 @@ def make_post(text, page_url=None, headless=False, image_path=None):
             # Create context restoring the saved state
             context = browser.new_context(storage_state=state_path)
             page = context.new_page()
-            posted = publish(page, text, page_url=page_url, image_path=image_path)
-            if posted:
+            posted = publish(page, text, page_url=page_url, image_path=image_path, dry_run=dry_run)
+            if posted and not dry_run:
                 save_session(context, state_path)
             return posted
         finally:
             browser.close()
 
-def publish(page, text, page_url=None, image_path=None):
+def publish(page, text, page_url=None, image_path=None, dry_run=False):
     """Drive an open, logged-in page through writing and publishing one post."""
     target_url = page_url if page_url else "https://www.facebook.com/"
     print(f"Dang truy cap: {target_url}...")
@@ -448,6 +460,12 @@ def publish(page, text, page_url=None, image_path=None):
 
     settle(page, 2000)
 
+    if dry_run:
+        # Leaving now discards the draft: everything up to the post button worked, nothing was published
+        page.screenshot(path="debug_dry_run.png")
+        print("Che do thu (--dry-run): da soan xong bai viet nhung KHONG bam nut dang. Da luu anh debug_dry_run.png.")
+        return True
+
     # Step 1: Click the main action button (could be "Tiếp", "Next", "Đăng", "Post", etc.)
     print("Dang tien hanh dang bai...")
     # The button stays disabled until the attachment has been processed
@@ -517,6 +535,54 @@ def resolve_content(content, content_file):
         raise ValueError("Thieu noi dung bai viet (truyen truc tiep hoac dung --content-file).")
     return content
 
+def list_targets():
+    """Where posts can go (the pages saved in config.json), the saved templates and the login state."""
+    config = store.load_config(CONFIG_PATH)
+    saved = store.session_saved_at(STATE_PATH)
+    return {
+        "pages": config["pages"],
+        "templates": [template["name"] for template in config["templates"]],
+        "session_saved_at": saved.isoformat(timespec="seconds") if saved else None,
+    }
+
+def print_targets(targets):
+    for page in targets["pages"]:
+        language = f" [{page['language']}]" if page.get("language") else ""
+        print(f"{page['name']}{language}: {page['url']}")
+    if not targets["pages"]:
+        print("Chua co Fanpage/nhom nao trong config.json (them trong tab Fanpage & Mau cua app.py).")
+    if targets["templates"]:
+        print("Mau: " + ", ".join(targets["templates"]))
+    print("Phien dang nhap: " + (targets["session_saved_at"] or "chua co hoac da het han (chay python login.py)"))
+
+def new_debug_images(since):
+    """The debug screenshots written to the current folder since `since` (time.time())."""
+    return sorted(
+        name
+        for name in os.listdir(".")
+        if name.startswith("debug_") and name.endswith(".png") and os.path.getmtime(name) >= since - 1
+    )
+
+def run_post(args):
+    """Post according to `args`. Returns (exit_code, status, message)."""
+    try:
+        content = resolve_content(args.content, args.content_file)
+    except (OSError, ValueError) as e:
+        print(f"Loi: {e}")
+        return 1, "failed", str(e)
+
+    try:
+        ok = make_post(content, page_url=args.page, headless=args.headless, image_path=args.image,
+                       dry_run=args.dry_run)
+    except SessionExpired as e:
+        print(f"Loi: {e} Hay dang nhap lai (python login.py).")
+        return EXIT_SESSION_EXPIRED, "session_expired", f"{e} Hay dang nhap lai (python login.py)."
+    if not ok:
+        return 1, "failed", "Dang bai that bai, xem nhat ky (stderr) va cac anh debug_*.png."
+    if args.dry_run:
+        return 0, "dry_run", "Da soan xong bai nhung chua dang (--dry-run)."
+    return 0, "posted", "Facebook da nhan bai."
+
 def main(argv=None):
     use_utf8_output()
     parser = argparse.ArgumentParser(description="Tu dong dang bai Facebook.")
@@ -525,20 +591,32 @@ def main(argv=None):
     parser.add_argument("--page", type=str, default=None, help="Duong dan den trang Facebook can dang (Page URL).")
     parser.add_argument("--headless", action="store_true", help="Chay trinh duyet o che do an (Headless mode).")
     parser.add_argument("--image", type=str, default=None, help="Duong dan den tep anh hoac video can dang (tuy chon).")
+    parser.add_argument("--dry-run", action="store_true", help="Soan bai nhung khong bam nut dang (de thu).")
+    parser.add_argument("--json", action="store_true",
+                        help="In ket qua duoi dang mot dong JSON tren stdout; nhat ky chuyen sang stderr.")
+    parser.add_argument("--list-pages", action="store_true",
+                        help="Liet ke Fanpage/nhom, mau noi dung va tinh trang dang nhap roi thoat.")
 
     args = parser.parse_args(argv)
-    try:
-        content = resolve_content(args.content, args.content_file)
-    except (OSError, ValueError) as e:
-        print(f"Loi: {e}")
-        return 1
 
-    try:
-        ok = make_post(content, page_url=args.page, headless=args.headless, image_path=args.image)
-    except SessionExpired as e:
-        print(f"Loi: {e} Hay dang nhap lai (python login.py).")
-        return EXIT_SESSION_EXPIRED
-    return 0 if ok else 1
+    if args.list_pages:
+        targets = list_targets()
+        if args.json:
+            print(json.dumps(targets, ensure_ascii=False))
+        else:
+            print_targets(targets)
+        return 0
+
+    started = time.time()
+    # With --json stdout carries the result alone, so the progress log goes to stderr
+    log = contextlib.redirect_stdout(sys.stderr) if args.json else contextlib.nullcontext()
+    with log:
+        code, status, message = run_post(args)
+    if args.json:
+        result = {"ok": code == 0, "status": status, "exit_code": code, "message": message,
+                  "debug_images": new_debug_images(started)}
+        print(json.dumps(result, ensure_ascii=False))
+    return code
 
 if __name__ == "__main__":
     sys.exit(main())

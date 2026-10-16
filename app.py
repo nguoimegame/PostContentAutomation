@@ -29,6 +29,25 @@ STATUS_COLORS = {
     "failed": "#b3261e",
     "missed": "#a15c00",
 }
+# Offered in the Fanpage language box; anything else can be typed in
+LANGUAGES = [
+    "Tiếng Việt (Việt Nam)",
+    "English (Mỹ)",
+    "English (Anh)",
+    "English (Úc)",
+    "English (Canada)",
+    "English (Philippines)",
+    "English (Ấn Độ)",
+    "日本語 (Nhật Bản)",
+    "한국어 (Hàn Quốc)",
+    "中文 (Trung Quốc)",
+    "中文 (Đài Loan)",
+    "ไทย (Thái Lan)",
+    "Bahasa Indonesia (Indonesia)",
+    "Español (Tây Ban Nha)",
+    "Français (Pháp)",
+    "Deutsch (Đức)",
+]
 MEDIA_TYPES = [
     ("Ảnh và video", "*.png *.jpg *.jpeg *.gif *.webp *.bmp *.mp4 *.mov *.avi *.mkv *.webm *.m4v *.wmv"),
     ("Ảnh", "*.png *.jpg *.jpeg *.gif *.webp *.bmp"),
@@ -102,15 +121,20 @@ class App:
     # Pages and templates
     # ------------------------------------------------------------------
 
-    def add_page(self, name, url):
-        """Add a Fanpage, or update the URL of the one with the same name."""
+    def add_page(self, name, url, language=""):
+        """Add a Fanpage, or update the one with the same name.
+
+        `language` says which language and country the page is for, e.g. "English (Mỹ)".
+        """
         name = name.strip()
         if not name:
             raise ValueError("Chưa nhập tên Fanpage.")
         if name == PERSONAL:
             raise ValueError("Tên này đã được dùng cho trang cá nhân.")
         url = store.normalize_page_url(url)
-        self._upsert(self.settings["pages"], {"name": name, "url": url})
+        self._upsert(
+            self.settings["pages"], {"name": name, "url": url, "language": language.strip()}
+        )
         self._save_settings()
         self._refresh_pages()
         self._refresh_queue()
@@ -213,8 +237,18 @@ class App:
 
     def open_target_dialog(self):
         """Open the popup for picking targets; its OK button calls select_targets."""
+        labels = {
+            page["name"]: f"{page['name']}  ·  {page['language']}"
+            for page in self.settings["pages"]
+            if page.get("language")
+        }
         return TargetDialog(
-            self.root, self.available_targets(), self.selected_targets(), self.select_targets, self._px
+            self.root,
+            self.available_targets(),
+            self.selected_targets(),
+            self.select_targets,
+            self._px,
+            labels,
         )
 
     def selected_page_urls(self):
@@ -678,8 +712,15 @@ class App:
         ttk.Label(pages, text="Ví dụ: facebook.com/tentrang", style="Hint.TLabel").grid(
             row=3, column=1, sticky="w"
         )
+        ttk.Label(pages, text="Ngôn ngữ:").grid(row=4, column=0, sticky="w", pady=2)
+        self.page_language_var = tk.StringVar(master=self.root)
+        # Not readonly: a language or country missing from the list can be typed in
+        self.page_language_box = ttk.Combobox(
+            pages, textvariable=self.page_language_var, values=LANGUAGES
+        )
+        self.page_language_box.grid(row=4, column=1, sticky="ew", pady=2)
         page_buttons = ttk.Frame(pages)
-        page_buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(6, 0))
+        page_buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(6, 0))
         ttk.Button(page_buttons, text="Lưu Fanpage", command=self._on_save_page_clicked).pack(side="left")
         ttk.Button(page_buttons, text="Xóa", command=self._on_remove_page_clicked).pack(
             side="left", padx=(6, 0)
@@ -814,7 +855,8 @@ class App:
         self.select_targets(ticked)
         self.page_list.delete(0, "end")
         for page in self.settings["pages"]:
-            self.page_list.insert("end", f"{page['name']}  —  {page['url']}")
+            parts = [page["name"], page.get("language", ""), page["url"]]
+            self.page_list.insert("end", "  —  ".join(part for part in parts if part))
 
     def _refresh_templates(self):
         names = [template["name"] for template in self.settings["templates"]]
@@ -1214,10 +1256,13 @@ class App:
             page = self.settings["pages"][selected[0]]
             self.page_name_var.set(page["name"])
             self.page_url_var.set(page["url"])
+            self.page_language_var.set(page.get("language", ""))
 
     def _on_save_page_clicked(self):
         try:
-            self.add_page(self.page_name_var.get(), self.page_url_var.get())
+            self.add_page(
+                self.page_name_var.get(), self.page_url_var.get(), self.page_language_var.get()
+            )
         except ValueError as error:
             self._error(error)
         else:
@@ -1232,6 +1277,7 @@ class App:
             self.remove_page(name)
             self.page_name_var.set("")
             self.page_url_var.set("")
+            self.page_language_var.set("")
 
     def _on_template_list_selected(self, event=None):
         selected = self.template_list.curselection()
@@ -1309,11 +1355,15 @@ class App:
 
 
 class TargetDialog:
-    """Popup with one checkbox per target. OK hands the ticked names to `on_ok`."""
+    """Popup with one checkbox per target. OK hands the ticked names to `on_ok`.
+
+    `labels` optionally maps a name to the text shown on its checkbox.
+    """
 
     MAX_VISIBLE_ROWS = 12
 
-    def __init__(self, parent, names, ticked, on_ok, px):
+    def __init__(self, parent, names, ticked, on_ok, px, labels=None):
+        labels = labels or {}
         self._on_ok = on_ok
         self.window = window = tk.Toplevel(parent)
         window.title("Chọn nơi đăng")
@@ -1349,7 +1399,7 @@ class TargetDialog:
         self.checks = {}  # name -> Checkbutton
         for name in names:
             variable = tk.BooleanVar(master=window, value=name in ticked)
-            box = ttk.Checkbutton(holder, text=name, variable=variable)
+            box = ttk.Checkbutton(holder, text=labels.get(name, name), variable=variable)
             box.pack(anchor="w", fill="x", padx=6)
             self.vars[name] = variable
             self.checks[name] = box

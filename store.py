@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 DEFAULT_CONFIG = {
     "headless": False,
     "scheduler_enabled": True,
-    "pages": [],  # [{"name": ..., "url": ...}]
+    "pages": [],  # [{"name": ..., "url": ..., "language": ...}]
     "templates": [],  # [{"name": ..., "content": ..., "media_path": ...}]
     "last_pages": [],  # names ticked in the compose tab
     "page_gap_minutes": 5,  # wait between targets when posting to several
@@ -71,6 +71,10 @@ def load_config(path):
                 continue
             config[key] = value
     config["pages"] = _named_items(config["pages"], "name", "url")
+    for page in config["pages"]:
+        # Pages saved before languages existed have no "language"; that is fine
+        if not isinstance(page.get("language", ""), str):
+            page["language"] = ""
     config["templates"] = _named_items(config["templates"], "name", "content")
     config["last_pages"] = [name for name in config["last_pages"] if isinstance(name, str)]
     if config["page_gap_minutes"] < 0:

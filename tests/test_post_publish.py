@@ -304,13 +304,13 @@ GROUP = FEED + """
 class PublishTest(FakeFacebookTestCase):
     URL = "https://www.facebook.com/groups/jaecoo"
 
-    def publish(self, enable_after_ms=600, on_post="box.remove();", **limits):
+    def publish(self, enable_after_ms=600, on_post="box.remove();", dry_run=False, **limits):
         self.html = (GROUP % on_post).replace("ENABLE_AFTER_MS", str(enable_after_ms))
         limits = {"SETTLE_SCALE": 0.01, "BUTTON_ENABLE_TIMEOUT_MS": 10000, "POST_TIMEOUT_MS": 10000, **limits}
         with contextlib.ExitStack() as stack:
             for name, value in limits.items():
                 stack.enter_context(mock.patch.object(post, name, value))
-            return self.quietly(post.publish, self.page, "Xin chào cả nhà", page_url=self.URL)
+            return self.quietly(post.publish, self.page, "Xin chào cả nhà", page_url=self.URL, dry_run=dry_run)
 
     def test_post_is_published_once_the_button_is_enabled(self):
         self.log_in()
@@ -319,6 +319,13 @@ class PublishTest(FakeFacebookTestCase):
         # The feed post that mentions "chuyển" was not opened on the way
         self.assertEqual(self.page.url, self.URL)
         self.assertTrue(os.path.exists("debug_result.png"))
+
+    def test_dry_run_writes_the_post_but_does_not_publish_it(self):
+        self.log_in()
+        self.assertTrue(self.publish(dry_run=True))
+        self.assertEqual(self.page.evaluate("posted"), [])
+        self.assertTrue(os.path.exists("debug_dry_run.png"))
+        self.assertFalse(os.path.exists("debug_result.png"))
 
     def test_fails_when_the_post_button_never_becomes_enabled(self):
         self.log_in()
