@@ -220,6 +220,13 @@ class FakeFacebookTestCase(QuietBrowserTestCase):
         self.dir = tmp.name
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.dir)
+        patcher = mock.patch.object(post, "DEBUG_DIR", os.path.join(self.dir, "debug"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def shot(self, kind):
+        """Whether the screenshot of that kind was saved (and its latest_ copy)."""
+        return os.path.exists(os.path.join(post.DEBUG_DIR, f"latest_{kind}.png"))
 
     def log_in(self):
         self.page.context.add_cookies([LOGIN_COOKIE])
@@ -310,6 +317,7 @@ class PublishTest(FakeFacebookTestCase):
         with contextlib.ExitStack() as stack:
             for name, value in limits.items():
                 stack.enter_context(mock.patch.object(post, name, value))
+            stack.enter_context(mock.patch.object(post, "find_post_url", return_value=(None, None)))
             return self.quietly(post.publish, self.page, "Xin chào cả nhà", page_url=self.URL, dry_run=dry_run)
 
     def test_post_is_published_once_the_button_is_enabled(self):
@@ -318,32 +326,32 @@ class PublishTest(FakeFacebookTestCase):
         self.assertEqual(self.page.evaluate("posted"), ["Xin chào cả nhà"])
         # The feed post that mentions "chuyển" was not opened on the way
         self.assertEqual(self.page.url, self.URL)
-        self.assertTrue(os.path.exists("debug_result.png"))
+        self.assertTrue(self.shot("result"))
 
     def test_dry_run_writes_the_post_but_does_not_publish_it(self):
         self.log_in()
         self.assertTrue(self.publish(dry_run=True))
         self.assertEqual(self.page.evaluate("posted"), [])
-        self.assertTrue(os.path.exists("debug_dry_run.png"))
-        self.assertFalse(os.path.exists("debug_result.png"))
+        self.assertTrue(self.shot("dry_run"))
+        self.assertFalse(self.shot("result"))
 
     def test_fails_when_the_post_button_never_becomes_enabled(self):
         self.log_in()
         self.assertFalse(self.publish(enable_after_ms=3600000, BUTTON_ENABLE_TIMEOUT_MS=800))
         self.assertEqual(self.page.evaluate("posted"), [])
-        self.assertTrue(os.path.exists("debug_post_button.png"))
-        self.assertFalse(os.path.exists("debug_result.png"))
+        self.assertTrue(self.shot("post_button"))
+        self.assertFalse(self.shot("result"))
 
     def test_fails_when_the_composer_stays_open_after_the_click(self):
         self.log_in()
         self.assertFalse(self.publish(on_post="/* Facebook showed an error and kept the dialog */", POST_TIMEOUT_MS=500))
-        self.assertTrue(os.path.exists("debug_not_posted.png"))
-        self.assertFalse(os.path.exists("debug_result.png"))
+        self.assertTrue(self.shot("not_posted"))
+        self.assertFalse(self.shot("result"))
 
     def test_expired_session_is_reported_as_such(self):
         with self.assertRaises(post.SessionExpired):
             self.publish()
-        self.assertTrue(os.path.exists("debug_session.png"))
+        self.assertTrue(self.shot("session"))
         self.assertEqual(self.page.evaluate("typeof posted === 'undefined' ? [] : posted"), [])
 
 

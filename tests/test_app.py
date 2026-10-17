@@ -21,17 +21,20 @@ SESSION = json.dumps(
 
 # Stand-ins for the real scripts so the tests never open a browser or touch Facebook
 FAKE_POST = """
-import argparse, json, sys, time
+import argparse, json, os, sys, time
 parser = argparse.ArgumentParser()
 parser.add_argument("--content-file")
 parser.add_argument("--page")
-parser.add_argument("--image")
+parser.add_argument("--image", action="append", default=[])
+parser.add_argument("--account", default="")
+parser.add_argument("--allow-duplicate", action="store_true")
 parser.add_argument("--headless", action="store_true")
 args = parser.parse_args()
 with open(args.content_file, encoding="utf-8", newline="") as f:
     content = f.read()
 with open("posted.json", "w", encoding="utf-8") as f:
-    json.dump({"content": content, "page": args.page, "image": args.image,
+    json.dump({"content": content, "page": args.page, "image": args.image[0] if args.image else None,
+               "images": args.image, "account": args.account, "allow_duplicate": args.allow_duplicate,
                "headless": args.headless, "content_file": args.content_file}, f)
 with open("pages.log", "a", encoding="utf-8") as f:
     f.write((args.page or "") + "\\n")
@@ -40,6 +43,18 @@ if "SLOW" in content:
     time.sleep(120)
 if "EXPIRED" in content:
     sys.exit(2)
+if "RETRYABLE" in content and not os.path.exists("retried.flag"):
+    open("retried.flag", "w").close()
+    sys.exit(4)
+if "ALWAYSRETRY" in content:
+    sys.exit(4)
+if "BLOCKED" in content:
+    sys.exit(5)
+if "LINK" in content:
+    print("POST_VERIFIED=yes")
+    print("POST_URL=https://www.facebook.com/x/posts/42")
+if "NOTSEEN" in content:
+    print("POST_VERIFIED=no")
 sys.exit(1 if "FAIL" in content or "trang-hong" in (args.page or "") else 0)
 """
 

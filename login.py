@@ -1,5 +1,10 @@
+import argparse
 import os
+import sys
+
 from playwright.sync_api import sync_playwright
+
+import store
 
 # Saved next to the scripts so post.py finds it whatever folder it runs from
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
@@ -14,7 +19,9 @@ def save_state(context, state_path):
     context.storage_state(path=temp_path)
     os.replace(temp_path, state_path)
 
-def run():
+def run(account=""):
+    """Log in by hand and save the session. `account` names an extra login (state.<account>.json)."""
+    state_path = STATE_PATH if account in ("", "default") else store.state_path_for(os.path.dirname(STATE_PATH), account)
     with sync_playwright() as p:
         # Launch browser in headful mode so the user can interact
         browser = p.chromium.launch(headless=False)
@@ -39,10 +46,17 @@ def run():
             input()
 
         # Save storage state to a file
-        save_state(context, STATE_PATH)
-        print(f"\n[Thanh cong] Da luu thong tin phien dang nhap vao tep: {STATE_PATH}")
+        save_state(context, state_path)
+        print(f"\n[Thanh cong] Da luu thong tin phien dang nhap vao tep: {state_path}")
 
         browser.close()
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="Dang nhap Facebook bang tay va luu phien.")
+    parser.add_argument("--account", default="", help="Ten tai khoan phu (mac dinh: tai khoan state.json).")
+    try:
+        run(parser.parse_args().account)
+    except ValueError:
+        # ASCII only: this runs before any output encoding is set up
+        print("Loi: ten tai khoan khong hop le (chi chu, so, gach ngang va gach duoi).")
+        sys.exit(1)

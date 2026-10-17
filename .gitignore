@@ -17,3 +17,13 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+debug/
+history.jsonl
+state.*.json
+daemon.lock
+queue.lock
+daemon.log
+daemon.log.1
+daemon.status.json
+*.bak-*
+cards/

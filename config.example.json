@@ -5,7 +5,8 @@
     {
       "name": "Tên hiển thị của Fanpage hoặc nhóm",
       "url": "https://www.facebook.com/groups/ten-nhom",
-      "language": "Tiếng Việt (Việt Nam)"
+      "language": "Tiếng Việt (Việt Nam)",
+      "voice": "Thân mật, xưng mình - bạn, ít emoji"
     }
   ],
   "templates": [
@@ -16,5 +17,44 @@
     }
   ],
   "last_pages": [],
-  "page_gap_minutes": 5
+  "page_gap_minutes": 5,
+  "accounts": [],
+  "retry_attempts": 2,
+  "retry_delay_minutes": 5,
+  "grace_minutes": 5,
+  "spam": {
+    "duplicate_days": 7,
+    "similarity": 0.9,
+    "max_per_day": 15,
+    "max_per_page_per_day": 3
+  },
+  "notifications": {
+    "events": [
+      "done",
+      "failed",
+      "session_expired"
+    ],
+    "telegram": {
+      "bot_token": "",
+      "chat_id": ""
+    },
+    "webhook_url": "",
+    "email": {
+      "host": "",
+      "port": 587,
+      "user": "",
+      "password": "",
+      "sender": "",
+      "to": "",
+      "starttls": true
+    }
+  },
+  "ai": {
+    "api_key": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "fallbacks": true,
+    "voice": "",
+    "explain_failures": false
+  }
 }

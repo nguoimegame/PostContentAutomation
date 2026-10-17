@@ -47,7 +47,7 @@ class NewJobTest(unittest.TestCase):
 
     def test_rejects_unknown_repeat(self):
         with self.assertRaises(ValueError):
-            make_job(repeat="monthly")
+            make_job(repeat="yearly")
 
 
 class StaggerTest(unittest.TestCase):
@@ -303,7 +303,7 @@ class ValidJobsTest(unittest.TestCase):
         self.assertEqual(scheduler.due_jobs([job], datetime(2026, 10, 12, 9, 0)), [job])
 
     def test_unknown_repeat_and_status_are_reset(self):
-        (job,), _ = scheduler.valid_jobs([dict(make_job(), repeat="monthly", status="???")])
+        (job,), _ = scheduler.valid_jobs([dict(make_job(), repeat="yearly", status="???")])
         self.assertEqual((job["repeat"], job["status"]), ("none", "pending"))
 
     def test_unreadable_hold_is_removed(self):
